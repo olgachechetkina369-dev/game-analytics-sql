@@ -1,0 +1,82 @@
+-- Маркетинговая акция:
+-- В марте 2023 года маркетинг провёл акцию: чем чаще игрок заходил в игру, тем больше получал бесплатных кристаллов. Акция шла первые 3 недели марта.
+
+-- Расчет базовых метрик (DAU, WAU, MAU)
+-- Цель: Оценка динамики пользовательской базы и влияния маркетинговой акции (март 2023)
+-- Бизнес-вопрос: Видим ли мы позитивный эффект этой акции в метриках?
+
+-- 1. Расчет DAU (количество уникальных пользователей за день)
+
+select
+  count (distinct id_user) as DAU
+     ,date_trunc ('day', start_session) as Dd
+     from skygame. game_sessions
+     group by Dd
+     order by Dd desc
+     
+     -------
+-- 2. Расчет WAU (количество уникальных пользователей за неделю) 
+   
+select
+  count (distinct id_user) as WAU
+     ,date_trunc ('week', start_session) as Wd
+     from skygame. game_sessions
+     group by Wd
+     order by Wd desc
+     -------
+
+-- 3. Расчет MAU (количество уникальных пользователей за месяц) 
+   
+select
+  count (distinct id_user) as MAU
+     ,date_trunc ('month', start_session) as Md
+     from skygame. game_sessions
+     group by Md
+     order by Md desc
+     -------
+
+-- Самые вовлечённые игроки:
+
+Теперь бизнес планирует новую акцию: бонусы получат игроки, которые проводят в игре больше всего времени. Но в первую очередь их интересуют игроки, зарегистрированные в 2022 году.
+
+-- Анализ вовлеченности: ТОП-25 игроков по времени в игре (зарегистрированных в 2022 году)
+-- Логика расчета: соединение таблиц сессий и пользователей, фильтрация завершенных сессий,
+-- конвертация общей длительности в минуты и расчет топ-25 игроков.
+-- 4.
+
+select 
+       a.id_user
+   , sum (extract(epoch from (end_session - start_session)) / 60) as session_minutes
+from skygame.game_sessions a
+     join skygame.users b
+     on a.id_user=b.id_user
+     where end_session is not null
+     and date_part('year', reg_date)=2022
+    group by a.id_user 
+    order by session_minutes desc
+    limit 25
+    -------
+
+-- Чистота данных:
+-- Анализ незавершенных («битых») сессий по типам устройств
+-- Цель: Оценить масштаб проблемы с незавершенными сессиями (end_session is null).
+
+-- Общее количество и доля проблемных сессий
+-- Доля проблемных сессий отдельно внутри iOS и внутри Android
+-- Распределение «битых» сессий между устройствами (структура проблемы)
+-- 5.
+
+ select 
+
+       sum (case when end_session is null then 1.0 else 0.0 end)as sum_problem
+     , sum (case when end_session is null then 1.0 else 0.0 end)/count (*) as cnt_problem
+     , sum (case when dev_type = 'ios' and end_session is null then 1.0 else 0.0 end)/sum(case when dev_type = 'ios' then 1.0 else 0.0 end) as percent_problem_ios
+     , sum (case when dev_type = 'android' and end_session is null then 1.0 else 0.0 end)/sum(case when dev_type = 'android' then 1.0 else 0.0 end) as percent_problem_android
+     , sum (case when dev_type = 'ios' and end_session is null then 1.0 else 0.0 end)/sum (case when end_session is null then 1.0 else 0.0 end)as pp_ios
+     , sum (case when dev_type = 'android' and end_session is null then 1.0 else 0.0 end)/sum (case when end_session is null then 1.0 else 0.0 end)as pp_android
+
+from skygame.game_sessions a
+     join skygame.users b
+     on a.id_user=b.id_user
+  
+  
