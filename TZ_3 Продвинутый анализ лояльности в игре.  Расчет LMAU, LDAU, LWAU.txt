@@ -1,0 +1,189 @@
+
+-- Продвинутый анализ лояльности пользователей (LMAU)
+
+-- ============================================================================
+-- № 1: Критерий crit_invite (Пригласил >= 3 друзей, из них >= 1 зарегистрировался)
+-- ============================================================================
+
+  
+   with crit_invite as
+         (select id_user
+          ,count(*) cnt_invite
+               , sum (ref_reg)  cnt_reg    
+         from skygame.referral
+         group by id_user
+         having count(*)>=3 
+          and sum (ref_reg)>=1
+           )
+  select date_trunc ('month', start_session)as mm
+         ,count(distinct a.id_user) as cnt_user
+  from skygame.game_sessions a
+  join crit_invite b
+     on a.id_user=b.id_user   -- Соединяем напрямую вместо WHERE IN
+     group by mm
+    order by mm    
+
+-- ============================================================================
+-- № 2: Критерий crit_1000 (Суммарная оплата >= 1000 рублей за всё время)
+-- ============================================================================
+
+  with   crit_1000  as            
+               (select 
+                   id_user
+                 ,sum(cnt_buy*price)as revenue
+              from skygame.monetary m 
+               join skygame.item_list i
+                  on m.id_item_buy = i.id_item
+               join skygame.log_prices l 
+                  on m.id_item_buy=l.id_item 
+                  and dtime_pay>=valid_from 
+                  and dtime_pay::date < coalesce(valid_to, to_date('3000-01-01', 'YYYY-MM-DD')
+               group by id_user
+               having sum(cnt_buy*price)>=1000
+               )
+   select date_trunc ('month', start_session)as mm
+        ,count(distinct a.id_user) as cnt_user
+  from skygame.game_sessions a
+  where id_user in (select id_user from crit_1000)
+  group by mm
+  order by mm  
+              
+ -- ============================================================================
+-- № 3: Пересечение критериев (crit_invite AND crit_1000)
+-- ============================================================================
+
+  with crit_invite as
+        (select id_user
+               ,count(*) cnt_invite
+               , sum (ref_reg)  cnt_reg
+         from skygame.referral
+         group by id_user
+         having count(*)>=3 
+           and sum (ref_reg)>=1
+           ),
+
+ crit_1000  as            
+               (select 
+                   id_user
+               from skygame.monetary m 
+               join skygame.item_list i
+                  on m.id_item_buy = i.id_item
+               join skygame.log_prices l 
+                  on m.id_item_buy=l.id_item 
+                  and dtime_pay::date >= valid_from 
+                  and dtime_pay::date < coalesce(valid_to, to_date('3000-01-01', 'YYYY-MM-DD'))
+               group by id_user
+               having sum(cnt_buy * price) >=1000
+               )
+select date_trunc('month', start_session) as mm
+      ,count(distinct id_user) as cnt_user
+from skygame.game_sessions
+where id_user in (select id_user from crit_1000)
+  and id_user in (select id_user from crit_invite)
+group by mm
+order by mm
+
+
+-- ============================================================================
+-- № 4: Объединение критериев (crit_invite OR crit_1000)
+-- ============================================================================
+
+ with crit_invite as
+        (select id_user
+               ,count(*) cnt_invite
+               , sum (ref_reg)  cnt_reg
+         from skygame.referral
+         group by id_user
+         having count(*)>=3 
+           and sum (ref_reg)>=1
+           ),
+
+ crit_1000  as            
+               (select 
+                   id_user
+               from skygame.monetary m 
+               join skygame.item_list i
+                  on m.id_item_buy = i.id_item
+               join skygame.log_prices l 
+                  on m.id_item_buy=l.id_item 
+                  and dtime_pay::date >= valid_from 
+                  and dtime_pay::date < coalesce(valid_to, to_date('3000-01-01', 'YYYY-MM-DD'))
+               group by id_user
+               having sum(cnt_buy * price) >=1000
+               )
+select date_trunc('month', start_session) as mm
+      ,count(distinct id_user) as cnt_user
+from skygame.game_sessions
+where id_user in (select id_user from crit_1000)
+  or id_user in (select id_user from crit_invite)
+group by mm
+order by mm
+
+-- ============================================================================
+-- № 5: Разность множеств (Входят в crit_invite, но НЕ входят в crit_1000)
+-- ============================================================================
+with crit_invite as
+        (select id_user
+               ,count(*) cnt_invite
+               , sum (ref_reg)  cnt_reg
+         from skygame.referral
+         group by id_user
+         having count(*)>=3 
+           and sum (ref_reg)>=1
+           ),
+
+ crit_1000  as            
+               (select 
+                   id_user
+               from skygame.monetary m 
+               join skygame.item_list i
+                  on m.id_item_buy = i.id_item
+               join skygame.log_prices l 
+                  on m.id_item_buy=l.id_item 
+                  and dtime_pay::date >= valid_from 
+                  and dtime_pay::date < coalesce(valid_to, to_date('3000-01-01', 'YYYY-MM-DD'))
+               group by id_user
+               having sum(cnt_buy * price) >=1000
+               )
+select date_trunc('month', start_session) as mm
+      ,count(distinct id_user) as cnt_user
+from skygame.game_sessions
+where id_user in (select id_user from crit_1000)
+  and id_user not in (select id_user from crit_1000)
+group by mm
+order by mm
+
+-- ============================================================================
+-- Д№ 6: ТОП-100 лояльных пользователей по средним выплатам за месяц жизни
+-- ============================================================================
+
+ with   ltr  as            
+              (select 
+                  id_user
+                 ,sum(cnt_buy*price)as revenue
+              from skygame.monetary m 
+              join skygame.item_list i
+                 on m.id_item_buy = i.id_item
+              join skygame.log_prices l 
+                 on m.id_item_buy=l.id_item 
+                 and dtime_pay::date >= valid_from
+                 and dtime_pay::date < coalesce(valid_to, to_date('3000-01-01', 'YYYY-MM-DD'))
+              group by id_user
+                ),
+   lt_mm as    
+          (select u.id_user
+                 , ceil(extract('days' from max (start_session)- min(reg_date))/30) as lt_mm
+          from skygame.game_sessions g 
+           join skygame.users u
+           on g.id_user=u.id_user
+           group by u.id_user     -- ДОБАВЛЕНА ОБЯЗАТЕЛЬНАЯ ГРУППИРОВКА
+          )
+select ltr.id_user
+        ,revenue / case when lt_mn = 0 then 1 else lt_mn end as ltr_mm -- Защита от деления на 0
+        ,lt_mm
+   from ltr 
+   join lt_mm 
+      on ltr.id_user=lt_mm.id_user 
+   order by ltr_mm desc 
+   limit 100
+
