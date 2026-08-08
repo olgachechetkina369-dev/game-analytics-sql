@@ -1,0 +1,137 @@
+
+-- Анализ динамики выручки, поведения клиентов и маркетинговых стратегий «Zombie Revolution»
+
+-- ============================================================================
+-- СТРУКТУРА ИСПОЛЬЗУЕМЫХ ТАБЛИЦ:
+-- 1. skygame.monetary — Журнал платежей пользователей (id_user, id_item_buy, cnt_buy, dtime_pay)
+-- 2. skygame.item_list — Справочник внутриигровых товаров (id_item, name_item, type)
+-- 3. skygame.log_prices — История изменения цен на товары (id_item, price, valid_from, valid_to)
+--    * Примечание: Для незавершенных интервалов цен в valid_to использована подстановка coalesce на '3000-01-01'
+-- ============================================================================
+
+-- БЛОК 1. АНАЛИЗ ДИНАМИКИ ВЫРУЧКИ И ИЗМЕНЕНИЯ СТОИМОСТИ КРИСТАЛЛОВ
+
+-- -- ============================================================================
+-- ТЕСТОВЫЙ БЛОК ДЛЯ ВЕРИФИКАЦИИ ДАННЫХ И ПРОВЕРКИ ЛОГИКИ СВЯЗЕЙ
+-- (Использовался для ручной проверки корректности подтягивания цен на примере юзера №2901032)
+-- ============================================================================
+
+ select *
+ from skygame.monetary m
+ join skygame.item_list i 
+     on m.id_item_buy = i.id_item
+ join skygame.log_prices p 
+     on i.id_item = p.id_item
+ where id_user = '2901032' -- Фильтр для точечной проверки конкретного игрока
+   and dtime_pay::date >= valid_from
+   and dtime_pay::date < coalesce(valid_to, to_date('3000-01-01', 'YYYY-MM-DD'))
+ order by id_user, dtime_pay
+
+----------------------------------------------------------------------------------
+
+  --Динамика суммарных выплат по месяцам в разрезе типов продуктов 
+ 
+   select  date_trunc ('month',dtime_pay) mm
+          ,type
+          , sum(cnt_buy* price) as revenue
+   from skygame.monetary m
+      join skygame.item_list i
+       on m.id_item_buy = i.id_item
+      join skygame.log_prices p
+       on i.id_item=p.id_item
+       and dtime_pay :: date>= valid_from
+       and dtime_pay ::date < coalesce (valid_to,to_date ('3000-01-01','YYYY-MM-DD'))
+    group by mm
+          , type
+    order by type,mm
+-----------------------------------------------------------------------------------
+  --Влияние изменения стоимости кристалла на показатели (с 1 января 2023)
+--                   
+-- Задача ответить на вопрос бизнеса : Повлияло ли изменение цены на суммарную выручку, которую мы получаем с кристаллов?
+
+select 
+    date_trunc('month', dtime_pay) as mm
+    , avg(cnt_buy) as avg_cnt
+    , sum(cnt_buy * price) as revenue
+from skygame.monetary m
+join skygame.item_list i 
+    on m.id_item_buy = i.id_item
+join skygame.log_prices p 
+    on i.id_item = p.id_item
+    and dtime_pay::date >= valid_from
+    and dtime_pay::date < coalesce(valid_to, to_date('3000-01-01', 'YYYY-MM-DD'))
+where name_item = 'Crystal'
+group by mm
+order by mm
+---           
+ ----------------------------------------------------------------------------------
+-- Когортный анализ средней выручки на одного человека на один месяц.
+
+select *
+      ,extract('day' from (select max(dtime_pay) from skygame.monetary)-mm) /30 as interval
+      ,avg_revenue/(extract('day' from (select max(dtime_pay) from skygame.monetary)-mm) /30 ) as avg_rev_per_month
+from 
+        ( select  date_trunc ('month',reg_date) mm
+         , sum(cnt_buy* price) as revenue
+         , count (distinct u.id_user) as cnt
+         ,sum(cnt_buy* price)/count (distinct u.id_user) as avg_revenue
+        from skygame.monetary m
+             join skygame.users u
+               on u.id_user = m.id_user
+             join skygame.log_prices p
+               on m.id_item_buy = p.id_item
+               and dtime_pay :: date>= valid_from
+               and dtime_pay ::date < coalesce (valid_to,to_date ('3000-01-01','YYYY-MM-DD'))
+               where reg_date < (select max(dtime_pay) from skygame.monetary)-interval '1 month'
+               group by mm
+           ) t 
+ order by mm 
+         
+ -----------------------------------------------        
+-- select max(dtime_pay) from skygame.monetary
+-------------------------------------------------------------------------------
+-- ============================================================================
+-- БЛОК 2. АНАЛИЗ ИГРЫ «ZOMBIE REVOLUTION»
+-- ============================================================================
+
+--  №1:
+--  Проверка гипотезы о лояльности игроков из рекламы нояб-дек 2022
+--  выборка клиентов на 2 сегмента:
+--• когорта 11-12.2022
+--• остальные когорты
+--• сессии длиннее 5 минут
+
+select 
+    case when reg_date >='2022-11-01'and reg_date <= '2022-12-31'
+    then '11-12.2022' else 'Остальные' end as cogorts
+  , avg (extract(epoch from (end_session - start_session))/60) as avg_ses
+from skygame.users u
+left join skygame.game_sessions g
+   on g.id_user = u.id_user
+   where (end_session-start_session) > interval '5 minute'
+group by cogorts
+
+
+------------------------------------------------------------------------------------
+-- №2: 
+-- Расчет вирусности (K-factor) и прогнозирование объема когорт через CTE
+
+
+ 
+  with k_faktor as
+        (select  
+               count( distinct u.id_user) as cnt_total
+              ,sum(coalesce (ref_reg,0)) as sum_reg
+              ,sum (coalesce (ref_reg,0))/count( distinct u.id_user)as k_faktor
+         from skygame.users u
+         left join skygame.referral r
+         on u.id_user=r.id_user
+         ),
+ avg_cogort as
+        (select 
+             count( distinct id_user)/count(distinct date_trunc ('month',reg_date)) as avg_users_per_month
+         from skygame.users
+         )
+         select 
+          avg_users_per_month * k_faktor as forecast
+         from k_faktor,avg_cogort
